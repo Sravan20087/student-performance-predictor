@@ -1,171 +1,295 @@
-import os
+from pathlib import Path
+
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import streamlit as st
-import matplotlib.pyplot as plt
 from sklearn.linear_model import LinearRegression
-from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_error, r2_score
+from sklearn.model_selection import train_test_split
 
-st.set_page_config(page_title="Beat the AI | Student Predictor", page_icon="🎯", layout="wide")
+# ------------------------------------------------------------
+# Page setup
+# ------------------------------------------------------------
+st.set_page_config(
+    page_title="Beat the AI | Live Student Predictor",
+    page_icon="🎯",
+    layout="wide",
+)
 
-DATA_FILE = "student_performance.csv"
+DATA_PATH = Path(__file__).parent / "student_performance.csv"
+FEATURES = ["study_hours", "attendance", "previous_score", "sleep_hours"]
 
+
+# ------------------------------------------------------------
+# Load data and train the model once
+# ------------------------------------------------------------
 @st.cache_data
-def load_data():
-    if not os.path.exists(DATA_FILE):
+def load_dataset():
+    if not DATA_PATH.exists():
         raise FileNotFoundError(
-            "student_performance.csv is missing. Keep it in the same folder as app.py."
+            "student_performance.csv was not found. "
+            "Upload it to the same GitHub folder as app.py."
         )
-    return pd.read_csv(DATA_FILE)
+
+    data = pd.read_csv(DATA_PATH)
+    required = FEATURES + ["actual_marks"]
+    missing = [column for column in required if column not in data.columns]
+
+    if missing:
+        raise ValueError(f"The dataset is missing these columns: {missing}")
+
+    data = data[required].dropna()
+    if len(data) < 20:
+        raise ValueError("The dataset needs at least 20 complete records.")
+    return data
+
 
 @st.cache_resource
 def train_model():
-    data = load_data()
-    features = ["study_hours", "attendance", "previous_score", "sleep_hours"]
-    X = data[features]
+    data = load_dataset()
+    X = data[FEATURES]
     y = data["actual_marks"]
+
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.20, random_state=42
     )
+
     model = LinearRegression()
     model.fit(X_train, y_train)
-    predictions = np.clip(model.predict(X_test), 0, 100)
-    mae = mean_absolute_error(y_test, predictions)
-    r2 = r2_score(y_test, predictions)
-    return model, mae, r2, X_test.reset_index(drop=True), y_test.reset_index(drop=True)
 
-data = load_data()
-model, mae, r2, challenge_X, challenge_y = train_model()
+    test_predictions = np.clip(model.predict(X_test), 0, 100)
+    mae = mean_absolute_error(y_test, test_predictions)
+    r2 = r2_score(y_test, test_predictions)
 
-if "round_index" not in st.session_state:
-    st.session_state.round_index = 0
-if "total_score" not in st.session_state:
-    st.session_state.total_score = 0
-if "played" not in st.session_state:
-    st.session_state.played = 0
-if "revealed" not in st.session_state:
-    st.session_state.revealed = False
-if "history" not in st.session_state:
-    st.session_state.history = []
+    return model, mae, r2, len(X_train), len(X_test)
 
-st.title("🎯 Beat the AI: Student Performance Predictor")
+
+data = load_dataset()
+model, mae, r2, train_count, test_count = train_model()
+
+
+# ------------------------------------------------------------
+# Session state
+# ------------------------------------------------------------
+defaults = {
+    "rounds": 0,
+    "total_points": 0,
+    "history": [],
+    "last_result": None,
+}
+for key, value in defaults.items():
+    if key not in st.session_state:
+        st.session_state[key] = value
+
+
+# ------------------------------------------------------------
+# Header
+# ------------------------------------------------------------
+st.title("🎯 Beat the AI: Live Student Performance Predictor")
 st.write(
-    "Predict a student's exam marks from their study habits. Then compare your guess "
-    "with a Machine Learning model and the hidden actual score."
+    "Enter a student's details, make your own prediction, and see how close "
+    "you are to the Linear Regression model."
 )
 st.info(
-    "Learning-project note: this app uses an illustrative synthetic dataset. "
-    "It is for demonstrating regression, not for making real academic decisions."
+    "This is an educational demonstration. The included dataset is synthetic. "
+    "Predictions are estimates, not guaranteed exam results."
 )
 
+# ------------------------------------------------------------
+# Sidebar score panel
+# ------------------------------------------------------------
 with st.sidebar:
-    st.header("How to play")
-    st.markdown(
-        "1. Study the student's profile.  \n"
-        "2. Enter your predicted marks.  \n"
-        "3. Click **Lock my prediction**.  \n"
-        "4. Reveal the actual marks and compare your score with the AI."
-    )
-    st.divider()
-    st.metric("Your total points", st.session_state.total_score)
-    st.metric("Rounds played", st.session_state.played)
-    st.caption("Scoring: 100 points minus the absolute error, with a minimum of 0.")
-
-st.subheader("Your challenge")
-idx = st.session_state.round_index % len(challenge_X)
-profile = challenge_X.iloc[idx]
-actual = float(challenge_y.iloc[idx])
-ai_prediction = float(np.clip(model.predict(pd.DataFrame([profile]))[0], 0, 100))
-
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Study hours / day", f"{profile['study_hours']:.1f} hrs")
-c2.metric("Attendance", f"{profile['attendance']:.1f}%")
-c3.metric("Previous exam score", f"{profile['previous_score']:.1f}/100")
-c4.metric("Sleep / night", f"{profile['sleep_hours']:.1f} hrs")
-
-if not st.session_state.revealed:
-    guess = st.slider("What do you think this student's exam mark will be?", 0, 100, 65)
-    if st.button("🔒 Lock my prediction", type="primary", use_container_width=True):
-        st.session_state.current_guess = int(guess)
-        st.session_state.current_ai = round(ai_prediction, 1)
-        st.session_state.current_actual = round(actual, 1)
-        st.session_state.revealed = True
+    st.header("🏆 Your game score")
+    st.metric("Total points", st.session_state.total_points)
+    st.metric("Rounds played", st.session_state.rounds)
+    if st.button("Reset game score", use_container_width=True):
+        st.session_state.rounds = 0
+        st.session_state.total_points = 0
+        st.session_state.history = []
+        st.session_state.last_result = None
         st.rerun()
-else:
-    st.success("Predictions locked! Here are the results.")
-    r1, r2, r3 = st.columns(3)
-    r1.metric("Your prediction", f"{st.session_state.current_guess}/100")
-    r2.metric("AI prediction", f"{st.session_state.current_ai}/100")
-    r3.metric("Actual marks", f"{st.session_state.current_actual}/100")
 
-    player_error = abs(st.session_state.current_guess - st.session_state.current_actual)
-    ai_error = abs(st.session_state.current_ai - st.session_state.current_actual)
+    st.divider()
+    st.caption(
+        "Scoring: up to 100 points for a round, based on how close your guess "
+        "is to the AI's estimate. This measures agreement with the model, "
+        "not real-world prediction accuracy."
+    )
+
+
+# ------------------------------------------------------------
+# Live prediction form
+# ------------------------------------------------------------
+st.header("🧑‍🎓 Enter student information")
+st.caption("Change the values below to generate a new prediction.")
+
+with st.form("live_prediction_form"):
+    c1, c2 = st.columns(2)
+
+    with c1:
+        study_hours = st.slider(
+            "Study hours per day", min_value=0.0, max_value=12.0,
+            value=6.0, step=0.5
+        )
+        attendance = st.slider(
+            "Attendance (%)", min_value=0, max_value=100,
+            value=85, step=1
+        )
+
+    with c2:
+        previous_score = st.slider(
+            "Previous exam marks", min_value=0, max_value=100,
+            value=70, step=1
+        )
+        sleep_hours = st.slider(
+            "Sleep hours per night", min_value=0.0, max_value=12.0,
+            value=7.0, step=0.5
+        )
+
+    st.subheader("🎮 Make your prediction")
+    player_guess = st.slider(
+        "What marks do you think this student will score?",
+        min_value=0, max_value=100, value=75, step=1
+    )
+
+    submitted = st.form_submit_button(
+        "🚀 Predict marks and compare with AI",
+        type="primary",
+        use_container_width=True,
+    )
+
+
+# ------------------------------------------------------------
+# Generate live prediction
+# ------------------------------------------------------------
+if submitted:
+    input_data = pd.DataFrame([{
+        "study_hours": study_hours,
+        "attendance": attendance,
+        "previous_score": previous_score,
+        "sleep_hours": sleep_hours,
+    }])
+
+    ai_prediction = float(np.clip(model.predict(input_data)[0], 0, 100))
+    player_error = abs(float(player_guess) - ai_prediction)
     points = max(0, int(round(100 - player_error)))
 
-    a, b = st.columns(2)
-    a.metric("Your error", f"{player_error:.1f} marks")
-    b.metric("AI error", f"{ai_error:.1f} marks")
+    st.session_state.last_result = {
+        "study_hours": study_hours,
+        "attendance": attendance,
+        "previous_score": previous_score,
+        "sleep_hours": sleep_hours,
+        "player_guess": int(player_guess),
+        "ai_prediction": round(ai_prediction, 1),
+        "difference": round(player_error, 1),
+        "points": points,
+    }
 
-    if player_error < ai_error:
-        st.balloons()
-        st.success(f"You beat the AI! You earned {points} points.")
-    elif player_error == ai_error:
-        st.info(f"It's a tie with the AI! You earned {points} points.")
+    st.session_state.rounds += 1
+    st.session_state.total_points += points
+    st.session_state.history.append({
+        "Round": st.session_state.rounds,
+        "Your guess": int(player_guess),
+        "AI estimate": round(ai_prediction, 1),
+        "Difference": round(player_error, 1),
+        "Points": points,
+    })
+
+
+# ------------------------------------------------------------
+# Show latest result
+# ------------------------------------------------------------
+result = st.session_state.last_result
+
+if result:
+    st.divider()
+    st.header("📊 Live prediction result")
+
+    r1, r2, r3 = st.columns(3)
+    r1.metric("Your prediction", f"{result['player_guess']}/100")
+    r2.metric("AI prediction", f"{result['ai_prediction']}/100")
+    r3.metric("Your points", f"{result['points']}/100")
+
+    st.metric("Difference between your guess and AI", f"{result['difference']} marks")
+
+    if result["difference"] <= 5:
+        st.success("🎉 Excellent! Your prediction is very close to the AI.")
+    elif result["difference"] <= 15:
+        st.info("👍 Good attempt! You are reasonably close to the AI.")
     else:
-        st.warning(f"The AI was closer this round. You earned {points} points.")
+        st.warning("🤖 The AI estimate is quite different from your guess. Try another profile!")
 
-    if st.button("➡️ Next round", type="primary", use_container_width=True):
-        st.session_state.total_score += points
-        st.session_state.played += 1
-        st.session_state.history.append({
-            "Round": st.session_state.played,
-            "Your guess": st.session_state.current_guess,
-            "AI guess": st.session_state.current_ai,
-            "Actual marks": st.session_state.current_actual,
-            "Your error": round(player_error, 1),
-            "Points": points
-        })
-        st.session_state.round_index += 1
-        st.session_state.revealed = False
-        st.rerun()
+    chart_df = pd.DataFrame({
+        "Prediction": ["Your guess", "AI estimate"],
+        "Marks": [result["player_guess"], result["ai_prediction"]],
+    })
+    fig, ax = plt.subplots()
+    ax.bar(chart_df["Prediction"], chart_df["Marks"])
+    ax.set_ylim(0, 100)
+    ax.set_ylabel("Marks out of 100")
+    ax.set_title("Your prediction vs AI estimate")
+    st.pyplot(fig)
+    plt.close(fig)
 
+    st.caption(
+        "For a newly entered student, the actual exam result is unknown. "
+        "The comparison above is between your guess and the model's estimate."
+    )
+
+    st.subheader("Student details used")
+    st.write({
+        "Study hours per day": result["study_hours"],
+        "Attendance (%)": result["attendance"],
+        "Previous exam marks": result["previous_score"],
+        "Sleep hours per night": result["sleep_hours"],
+    })
+
+
+# ------------------------------------------------------------
+# Model performance and history
+# ------------------------------------------------------------
 st.divider()
-st.subheader("📊 Model performance")
+st.header("📈 Model performance")
+
 m1, m2, m3 = st.columns(3)
-m1.metric("Mean Absolute Error (MAE)", f"{mae:.2f} marks")
+m1.metric("Mean Absolute Error", f"{mae:.2f} marks")
 m2.metric("R² score", f"{r2:.3f}")
-m3.metric("Training records", f"{len(data):,}")
+m3.metric("Training records", f"{train_count:,}")
 
 st.caption(
-    "MAE tells us the average prediction error in marks (lower is better). "
-    "R² describes how much variation the model explains (closer to 1 is generally better)."
+    f"The model was evaluated on {test_count:,} held-out records. "
+    "MAE is the average absolute error; lower is better. "
+    "R² describes how much variation the model explains."
 )
 
-with st.expander("Explore the dataset"):
-    st.write("A small preview of the synthetic training dataset:")
-    st.dataframe(data.head(15), use_container_width=True)
-    st.write("Average marks by study-hour group:")
-    plot_data = data.copy()
-    plot_data["study_group"] = pd.cut(
-        plot_data["study_hours"], bins=[0, 2, 4, 6, 8, 10],
-        labels=["0–2", "2–4", "4–6", "6–8", "8–10"]
-    )
-    summary = plot_data.groupby("study_group", observed=False)["actual_marks"].mean()
+with st.expander("Explore training dataset"):
+    st.write(f"Dataset records: {len(data):,}")
+    st.dataframe(data.head(20), use_container_width=True)
+
     fig, ax = plt.subplots()
-    summary.plot(kind="bar", ax=ax)
+    ax.scatter(data["study_hours"], data["actual_marks"], alpha=0.5)
     ax.set_xlabel("Study hours per day")
-    ax.set_ylabel("Average marks")
-    ax.set_title("Average marks by study-hour group")
+    ax.set_ylabel("Actual marks")
+    ax.set_title("Study hours vs marks in the training dataset")
     st.pyplot(fig)
     plt.close(fig)
 
 if st.session_state.history:
-    st.subheader("🏆 Your game history")
+    st.header("🏅 Game history")
     history_df = pd.DataFrame(st.session_state.history)
     st.dataframe(history_df, use_container_width=True)
     st.metric("Average points per round", f"{history_df['Points'].mean():.1f}")
-    if st.button("Reset game"):
-        for key in ["round_index", "total_score", "played", "revealed", "history"]:
-            st.session_state[key] = [] if key == "history" else (False if key == "revealed" else 0)
-        st.rerun()
+    csv = history_df.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        "Download game history as CSV",
+        data=csv,
+        file_name="prediction_game_history.csv",
+        mime="text/csv",
+    )
+
+st.divider()
+st.caption(
+    "Project note: the supplied CSV is synthetic and is used to train the model. "
+    "Live predictions are generated from the values entered in the form."
+)
