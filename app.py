@@ -254,7 +254,17 @@ st.header("📈 Model performance")
 
 m1, m2, m3 = st.columns(3)
 m1.metric("Mean Absolute Error", f"{mae:.2f} marks")
-m2.metric("R² score", f"{r2:.3f}")
+try:
+    r2_value = float(r2)
+    r2_display = (
+        f"{r2_value:.3f}"
+        if np.isfinite(r2_value)
+        else "N/A"
+    )
+except (TypeError, ValueError):
+    r2_display = "N/A"
+
+m2.metric("R² score", r2_display)
 m3.metric("Training records", f"{train_count:,}")
 
 st.caption(
